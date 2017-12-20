@@ -1,0 +1,113 @@
+/*
+# 1 SQL 
+function:
+example of using sql to do a comparison among students graduated from different school
+parameter:
+school_area_code = each high school has unique school area code
+gpa = grade point average
+parents_income = total income of both parents annual income
+student = 1: attend/ 0: did not attend
+*/
+
+PROC SQL;
+	CONNECT to ORACLE (USER = xxxx PASSWORD = xxx PATH = xxxx);
+		CREATE TABLE highsch_summary as
+			SELECT * FROM CONNECTION to ORACLE
+			(SELECT TO_NUMBER(school_area_code), AVG(gpa) as gpa, AVG(parents_income) as wealth,SUM(student) as total_stud)
+			  FROM stud_info
+			    WHERE start_date BETWEEN TO_DATE('09/01/2010','MM/DD/YYYY') AND
+			    	TO_DATE('05/01/2014','MM/DD/YYYY')
+			    		GROUP BY TO_NUMBER(school_area_code));
+	DISCONNECT FROM ORACLE;
+QUIT;
+
+
+/*
+# 2 handling large data set
+function:
+divid large data set into small data sets
+combine them if needed
+*/
+
+PROC SORT data = dic.data
+		(firstobs = 1 obs = 100000)
+		out = work.one;
+	BY category;
+RUN;
+
+PROC SORT data = dic.data
+		(firstobs = 100001 obs = 200000)
+		out = work.two;
+	BY category;
+RUN;
+
+PROC SORT data = dic.data
+		(firstobs = 200001)
+		out = work.three;
+	BY category;
+RUN;
+
+DATA work.category;
+	SET work.one work.two work.three;
+	BY category;
+RUN;
+
+
+/*
+# 3
+function: do sampling and forward feed data from low frequency to high
+parameter:
+lib = input data library
+inpath = path of input data
+outpath = path fo output data
+datevar = date to variable to sampling
+idvar = id number
+infreq =  input's frequency
+outfreq = output's frequency
+alignment =  date alignment
+*/
+%macro Do_Sample(lib =,
+                inpath = &syslast.,
+                outpath =,
+                datevar =,
+                idvar =,
+                infreq =,
+                outfreq =,
+                alignment =,
+                );
+
+    %if %length(&outpath) < 1 %then %do;
+        %let outpath = &inpath._&outfreq. ;
+    %end;
+
+    %let infreq = "&infreq.";
+    %let outfreq = "&outfreq.";
+    %let alignment = "&alignment.";
+
+    PROC SORT data=&lib..&inpath. out=&lib.._RESAMPLE_SORTED;
+        BY &idvar. &datevar.;
+    
+    PROC expand data=&lib.._RESAMPLE_SORTED out=&lib.._RESAMPLE_DIFF(drop=TIME);
+        BY &idvar.;
+        convert &datevar. = &datevar._next / transform = (lead 1);
+    
+    DATA &lib.._RESAMPLE_DIFF;
+        SET &lib.._RESAMPLE_DIFF;
+        &datevar._diff = min(
+                intck(&outfreq.,&datevar.,intnx(&infreq.,&datevar.,1,'S')),
+                intck(&outfreq.,&datevar.,intnx(&outfreq.,&datevar._next,0,'E'))
+                );
+    RUN;
+
+    DATA &lib..&outpath.;
+    RETAIN &idvar. date;
+    SET &lib.._RESAMPLE_DIFF;
+    DO i = 1 to &datevar._diff;
+        date = intnx(&outfreq.,&datevar.,i,&alignment.);
+        output;
+    END;
+    FORMAT date yymmdd10.;
+    DROP i &datevar._next &datevar._diff;
+    RUN;
+
+%mend Do_Sample;
